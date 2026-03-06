@@ -3,6 +3,8 @@ import { Play, Square, Activity, ShieldAlert, Cpu, BarChart3, AlertCircle } from
 import axios from 'axios';
 import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
+import AnalysisDash from './AnalysisDash';
+import SessionAuditDashboard from './SessionAuditDashboard';
 
 const NO_SPINNERS_STYLE = `
   input::-webkit-outer-spin-button,
@@ -344,6 +346,9 @@ function App() {
   const [sessionIds, setSessionIds] = useState({}); // indexKey -> [sid, sid]
   const [logs, setLogs] = useState([]);
   const [activeTab, setActiveTab] = useState('NIFTY');
+  const [view, setView] = useState('TERMINAL'); // 'TERMINAL' or 'ANALYSIS'
+  const [analysisSessionId, setAnalysisSessionId] = useState(null);
+  const [analysisIndexKey, setAnalysisIndexKey] = useState(null);
 
   // STRATEGY SETTINGS STATE (Designer state for NEW instances)
   const [designerSettings, setDesignerSettings] = useState({
@@ -493,6 +498,7 @@ function App() {
         setTimeout(() => fetchHistoricalTrades(sid), 1000);
       } else {
         const sid = sessionId;
+        // LOCAL STATE CLEAR ONLY AFTER API SUCCESS (Confirmed Termination)
         setStatus(prev => ({ ...prev, [sid]: 'OFFLINE' }));
         setSessionIds(prev => {
           const updated = (prev[indexKey] || []).filter(id => id !== sid);
@@ -621,197 +627,261 @@ function App() {
         </div>
       </header>
 
-      {/* Asset Navigation Tabs */}
-      <div className="flex gap-4 mb-12 border-b border-zinc-800/30 pb-6 overflow-x-auto custom-scrollbar no-scrollbar-firefox">
-        {INDICES.map(idx => (
-          <button
-            key={idx.key}
-            onClick={() => setActiveTab(idx.key)}
-            className={`px-12 py-5 rounded-lg text-lg font-black tracking-[0.25em] transition-all duration-300 border-2 uppercase whitespace-nowrap
-              ${activeTab === idx.key
-                ? `${idx.colorText} bg-white/10 border-zinc-600 shadow-[0_0_30px_rgba(255,255,255,0.05)] scale-105`
-                : 'text-zinc-600 border-transparent hover:text-zinc-400 hover:bg-white/5'
-              }`}
-          >
-            {idx.name}
-          </button>
-        ))}
-      </div>
+      {/* TOP NAVIGATION BAR */}
+      <header className="border-b border-zinc-800/50 bg-[#0A0B0D] px-8 py-4 flex items-center justify-between z-40 sticky top-0">
+        <div className="flex items-center gap-10">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-[10px] font-black italic">OMS</div>
+            <span className="font-black tracking-tighter text-xl text-white">TRADING.<span className="text-blue-500">OS</span></span>
+          </div>
 
-      <main className="max-w-[1920px] mx-auto pb-24 px-4 h-[calc(100vh-250px)]">
-        {INDICES.filter(idx => idx.key === activeTab).map(idx => {
-          const sids = sessionIds[idx.key] || [];
-          const activeSid = selectedSessions[idx.key];
+          <nav className="flex items-center gap-6">
+            <button
+              onClick={() => setView('TERMINAL')}
+              className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg transition-all ${view === 'TERMINAL' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.1)]' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Live_Terminal
+            </button>
+            <button
+              onClick={() => setView('AUDIT')}
+              className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg transition-all ${view === 'AUDIT' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.1)]' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Session_Audit
+            </button>
+          </nav>
+        </div>
 
-          return (
-            <div key={idx.key} className="flex gap-10 h-full">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest leading-none">Market_Link_Active</span>
+          </div>
+          <div className="h-4 w-px bg-zinc-800"></div>
+          <p className="text-[10px] font-black font-mono text-zinc-500">{new Date().toLocaleTimeString()}</p>
+        </div>
+      </header>
 
-              {/* LEFT SIDEBAR: SESSION VERTICAL TABS */}
-              <div className="w-[300px] flex flex-col border-r border-zinc-800/50 pr-6 gap-4">
-                <div className="mb-4">
-                  <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em] mb-4">Operations_Center</h3>
+      {view === 'TERMINAL' && (
+        <div className="flex gap-4 mb-12 border-b border-zinc-800/30 px-8 py-6 overflow-x-auto no-scrollbar">
+          {INDICES.map(idx => (
+            <button
+              key={idx.key}
+              onClick={() => setActiveTab(idx.key)}
+              className={`px-12 py-5 rounded-lg text-lg font-black tracking-[0.25em] transition-all duration-300 border-2 uppercase whitespace-nowrap
+                ${activeTab === idx.key
+                  ? `${idx.colorText} bg-white/10 border-zinc-600 shadow-[0_0_30px_rgba(255,255,255,0.05)] scale-105`
+                  : 'text-zinc-600 border-transparent hover:text-zinc-400 hover:bg-white/5'
+                }`}
+            >
+              {idx.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <main className="max-w-[1920px] mx-auto pb-24 px-4 h-full min-h-[calc(100vh-150px)]">
+        {view === 'ANALYSIS' ? (
+          <AnalysisDash
+            sessionId={analysisSessionId}
+            indexKey={analysisIndexKey}
+            onBack={() => setView('AUDIT')}
+          />
+        ) : view === 'AUDIT' ? (
+          <SessionAuditDashboard
+            onSelectSession={(sid, algo) => {
+              setAnalysisSessionId(sid);
+              setAnalysisIndexKey(algo);
+              setView('ANALYSIS');
+            }}
+          />
+        ) : (
+          INDICES.filter(idx => idx.key === activeTab).map(idx => {
+            const sids = sessionIds[idx.key] || [];
+            const activeSid = selectedSessions[idx.key];
+
+            return (
+              <div key={idx.key} className="flex gap-10 h-full">
+
+                {/* LEFT SIDEBAR: SESSION VERTICAL TABS */}
+                <div className="w-[300px] flex flex-col border-r border-zinc-800/50 pr-6 gap-4">
+                  <div className="mb-4">
+                    <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em] mb-4">Operations_Center</h3>
+                    <button
+                      onClick={() => handleAction(idx.key, 'start')}
+                      className="w-full bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-400 py-4 rounded-lg font-black tracking-widest text-[10px] transition-all flex items-center justify-center gap-2 group"
+                    >
+                      <Activity size={14} className="group-hover:animate-pulse" /> DEPLOY_NEW_INSTANCE
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3">
+                    <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em] mb-2 px-2">Active_Sessions</h3>
+                    {sids.length === 0 && (
+                      <div className="px-4 py-8 text-center border border-dashed border-zinc-800 rounded bg-white/2">
+                        <p className="text-[9px] text-zinc-700 italic">No nodes deployed</p>
+                      </div>
+                    )}
+                    {sids.map(sid => {
+                      const isSelected = activeSid === sid;
+                      const pnlVal = calculateSessionPnL(idx.key, sid);
+                      return (
+                        <button
+                          key={sid}
+                          onClick={() => setSelectedSessions(prev => ({ ...prev, [idx.key]: sid }))}
+                          className={`w-full text-left p-4 rounded-lg border transition-all duration-300 group
+                            ${isSelected
+                              ? 'bg-blue-600/10 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.1)]'
+                              : 'bg-zinc-900/30 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
+                            }`}
+                        >
+                          <div className="flex justify-between items-center mb-2">
+                            <span className={`text-[10px] font-black font-mono tracking-tighter ${isSelected ? 'text-blue-400' : 'text-zinc-500'}`}>
+                              #{sid.slice(-6).toUpperCase()}
+                            </span>
+                            <div className={`w-1.5 h-1.5 rounded-full ${status[sid] === 'RUNNING' ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-rose-500'}`}></div>
+                          </div>
+                          {pnlVal !== null && (
+                            <div className={`text-xs font-black font-mono ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {pnlVal >= 0 ? '+' : ''}{pnlVal.toFixed(0)}
+                            </div>
+                          )}
+                          <div className="text-[9px] text-zinc-600 mt-1 opacity-60 flex gap-2 font-mono">
+                            <span>L:{sessionSettings[sid]?.numLegs}</span>
+                            <span>I:{sessionSettings[sid]?.interval}</span>
+                          </div>
+                          {isSelected && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAnalysisSessionId(sid);
+                                setAnalysisIndexKey(idx.key);
+                                setView('ANALYSIS');
+                              }}
+                              className="mt-3 w-full py-1.5 bg-blue-500/20 hover:bg-blue-500/40 border border-blue-500/30 rounded text-[9px] font-black text-blue-400 tracking-widest transition-all"
+                            >
+                              ANALYSE_PERFORMANCE
+                            </button>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* MAIN CONTENT Area: Selected Session Workspace */}
+                <div className="flex-1 overflow-y-auto custom-scrollbar pb-10">
+                  <div className="grid lg:grid-cols-2 gap-12">
+
+                    {/* LEFT COLUMN: SESSION/IDLE */}
+                    <div className="space-y-8">
+                      {!activeSid ? (
+                        <div className="glass-panel p-12 rounded-lg border border-zinc-800 flex flex-col items-center justify-center h-full min-h-[400px] opacity-40">
+                          <ShieldAlert size={48} className="mb-4 text-zinc-500" />
+                          <h2 className="text-lg font-black uppercase tracking-[0.3em]">System_Idle</h2>
+                          <p className="mt-2 text-[10px] text-zinc-600 font-mono text-center">Deploy a new instance to begin automated trading.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-12 animate-in fade-in slide-in-from-left-4 duration-500">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-6">
+                              <h2 className={`text-xl font-black ${idx.colorText} uppercase tracking-[0.4em] whitespace-nowrap`}>
+                                Session_{activeSid.slice(-6).toUpperCase()}
+                              </h2>
+                              <div className={`h-0.5 w-[100px] bg-gradient-to-r ${idx.colorGrad} to-transparent opacity-20`}></div>
+                            </div>
+                            <button
+                              onClick={() => handleAction(idx.key, 'stop', activeSid)}
+                              className="text-rose-500 text-[10px] font-black uppercase tracking-widest hover:underline px-4 py-2 bg-rose-500/5 rounded border border-rose-500/20"
+                            >
+                              Terminate_X
+                            </button>
+                          </div>
+
+                          <StrategyCard
+                            name={idx.name}
+                            type={idx.type}
+                            status={status[activeSid] || 'OFFLINE'}
+                            loading={loading[activeSid]}
+                            strategyPrice={prices[idx.key]}
+                            syntheticPremium={premiums[idx.key]}
+                            pnl={calculateSessionPnL(idx.key, activeSid)}
+                            netPremium={calculateNetPremium(idx.key, activeSid)}
+                            trades={sessionTrades[activeSid]}
+                            settings={sessionSettings[activeSid]}
+                            onUpdateSetting={() => { }}
+                            onStart={() => { }}
+                            onStop={() => handleAction(idx.key, 'stop', activeSid)}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* RIGHT COLUMN: ALWAYS OPTION CHAIN */}
+                    <div className="space-y-8">
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="h-0.5 flex-1 bg-zinc-800/50"></div>
+                        <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.4em]">Live_Market_Matrix</h3>
+                        <div className="h-0.5 flex-1 bg-zinc-800/50"></div>
+                      </div>
+                      <OptionChainGrid
+                        indexKey={idx.key}
+                        activeCenter={centers[activeSid] || centers[idx.key] || 0}
+                        positions={activeSid ? getNetPositions(activeSid) : []}
+                        isCrude={idx.key === 'CRUDEOIL'}
+                        atmPrices={atmPrices[idx.key]}
+                      />
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* PERSISTENT ALGO DESIGNER (FLOATING) */}
+                <div className="fixed bottom-12 right-12 z-50 glass-panel p-6 border-blue-500/30 border-2 rounded-xl shadow-2xl w-[320px]">
+                  <div className="flex items-center gap-3 mb-6">
+                    <Cpu className="text-blue-500" size={18} />
+                    <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-300">New_Instance_Parameters</h3>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div>
+                      <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Legs</label>
+                      <input
+                        type="number"
+                        value={designerSettings[idx.key].numLegs}
+                        onChange={e => updateDesignerSetting(idx.key, 'numLegs', e.target.value)}
+                        className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Safety</label>
+                      <input
+                        type="number"
+                        value={designerSettings[idx.key].safetyGap}
+                        onChange={e => updateDesignerSetting(idx.key, 'safetyGap', e.target.value)}
+                        className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Adjustment_Interval</label>
+                      <input
+                        type="number"
+                        value={designerSettings[idx.key].interval}
+                        onChange={e => updateDesignerSetting(idx.key, 'interval', e.target.value)}
+                        className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
+                      />
+                    </div>
+                  </div>
                   <button
                     onClick={() => handleAction(idx.key, 'start')}
-                    className="w-full bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-400 py-4 rounded-lg font-black tracking-widest text-[10px] transition-all flex items-center justify-center gap-2 group"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3 rounded uppercase text-[9px] tracking-[.3em] transition-all shadow-[0_4px_15px_rgba(16,185,129,0.2)]"
                   >
-                    <Activity size={14} className="group-hover:animate-pulse" /> DEPLOY_NEW_INSTANCE
+                    Confirm_Deployment
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3">
-                  <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em] mb-2 px-2">Active_Sessions</h3>
-                  {sids.length === 0 && (
-                    <div className="px-4 py-8 text-center border border-dashed border-zinc-800 rounded bg-white/2">
-                      <p className="text-[9px] text-zinc-700 italic">No nodes deployed</p>
-                    </div>
-                  )}
-                  {sids.map(sid => {
-                    const isSelected = activeSid === sid;
-                    const pnlVal = calculateSessionPnL(idx.key, sid);
-                    return (
-                      <button
-                        key={sid}
-                        onClick={() => setSelectedSessions(prev => ({ ...prev, [idx.key]: sid }))}
-                        className={`w-full text-left p-4 rounded-lg border transition-all duration-300 group
-                          ${isSelected
-                            ? 'bg-blue-600/10 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.1)]'
-                            : 'bg-zinc-900/30 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
-                          }`}
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <span className={`text-[10px] font-black font-mono tracking-tighter ${isSelected ? 'text-blue-400' : 'text-zinc-500'}`}>
-                            #{sid.slice(-6).toUpperCase()}
-                          </span>
-                          <div className={`w-1.5 h-1.5 rounded-full ${status[sid] === 'RUNNING' ? 'bg-emerald-500 shadow-[0_0_5px_#10b981]' : 'bg-rose-500'}`}></div>
-                        </div>
-                        {pnlVal !== null && (
-                          <div className={`text-xs font-black font-mono ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                            {pnlVal >= 0 ? '+' : ''}{pnlVal.toFixed(0)}
-                          </div>
-                        )}
-                        <div className="text-[9px] text-zinc-600 mt-1 opacity-60 flex gap-2 font-mono">
-                          <span>L:{sessionSettings[sid]?.numLegs}</span>
-                          <span>I:{sessionSettings[sid]?.interval}</span>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
               </div>
-
-              {/* MAIN CONTENT Area: Selected Session Workspace */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar pb-10">
-                <div className="grid lg:grid-cols-2 gap-12">
-
-                  {/* LEFT COLUMN: SESSION/IDLE */}
-                  <div className="space-y-8">
-                    {!activeSid ? (
-                      <div className="glass-panel p-12 rounded-lg border border-zinc-800 flex flex-col items-center justify-center h-full min-h-[400px] opacity-40">
-                        <ShieldAlert size={48} className="mb-4 text-zinc-500" />
-                        <h2 className="text-lg font-black uppercase tracking-[0.3em]">System_Idle</h2>
-                        <p className="mt-2 text-[10px] text-zinc-600 font-mono text-center">Deploy a new instance to begin automated trading.</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-12 animate-in fade-in slide-in-from-left-4 duration-500">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-6">
-                            <h2 className={`text-xl font-black ${idx.colorText} uppercase tracking-[0.4em] whitespace-nowrap`}>
-                              Session_{activeSid.slice(-6).toUpperCase()}
-                            </h2>
-                            <div className={`h-0.5 w-[100px] bg-gradient-to-r ${idx.colorGrad} to-transparent opacity-20`}></div>
-                          </div>
-                          <button
-                            onClick={() => handleAction(idx.key, 'stop', activeSid)}
-                            className="text-rose-500 text-[10px] font-black uppercase tracking-widest hover:underline px-4 py-2 bg-rose-500/5 rounded border border-rose-500/20"
-                          >
-                            Terminate_X
-                          </button>
-                        </div>
-
-                        <StrategyCard
-                          name={idx.name}
-                          type={idx.type}
-                          status={status[activeSid] || 'OFFLINE'}
-                          loading={loading[activeSid]}
-                          strategyPrice={prices[idx.key]}
-                          syntheticPremium={premiums[idx.key]}
-                          pnl={calculateSessionPnL(idx.key, activeSid)}
-                          netPremium={calculateNetPremium(idx.key, activeSid)}
-                          trades={sessionTrades[activeSid]}
-                          settings={sessionSettings[activeSid]}
-                          onUpdateSetting={() => { }}
-                          onStart={() => { }}
-                          onStop={() => handleAction(idx.key, 'stop', activeSid)}
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  {/* RIGHT COLUMN: ALWAYS OPTION CHAIN */}
-                  <div className="space-y-8">
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="h-0.5 flex-1 bg-zinc-800/50"></div>
-                      <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.4em]">Live_Market_Matrix</h3>
-                      <div className="h-0.5 flex-1 bg-zinc-800/50"></div>
-                    </div>
-                    <OptionChainGrid
-                      indexKey={idx.key}
-                      activeCenter={centers[activeSid] || centers[idx.key] || 0}
-                      positions={activeSid ? getNetPositions(activeSid) : []}
-                      isCrude={idx.key === 'CRUDEOIL'}
-                      atmPrices={atmPrices[idx.key]}
-                    />
-                  </div>
-
-                </div>
-              </div>
-
-              {/* PERSISTENT ALGO DESIGNER (FLOATING) */}
-              <div className="fixed bottom-12 right-12 z-50 glass-panel p-6 border-blue-500/30 border-2 rounded-xl shadow-2xl w-[320px]">
-                <div className="flex items-center gap-3 mb-6">
-                  <Cpu className="text-blue-500" size={18} />
-                  <h3 className="text-[10px] font-black uppercase tracking-widest text-zinc-300">New_Instance_Parameters</h3>
-                </div>
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Legs</label>
-                    <input
-                      type="number"
-                      value={designerSettings[idx.key].numLegs}
-                      onChange={e => updateDesignerSetting(idx.key, 'numLegs', e.target.value)}
-                      className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Safety</label>
-                    <input
-                      type="number"
-                      value={designerSettings[idx.key].safetyGap}
-                      onChange={e => updateDesignerSetting(idx.key, 'safetyGap', e.target.value)}
-                      className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Adjustment_Interval</label>
-                    <input
-                      type="number"
-                      value={designerSettings[idx.key].interval}
-                      onChange={e => updateDesignerSetting(idx.key, 'interval', e.target.value)}
-                      className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
-                    />
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleAction(idx.key, 'start')}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-3 rounded uppercase text-[9px] tracking-[.3em] transition-all shadow-[0_4px_15px_rgba(16,185,129,0.2)]"
-                >
-                  Confirm_Deployment
-                </button>
-              </div>
-
-            </div>
-          )
-        })}
+            )
+          })
+        )}
       </main>
 
       <footer className="fixed bottom-0 left-0 right-0 h-10 bg-[#0A0B0D] border-t border-zinc-800 flex items-center justify-between px-8 text-[9px] text-zinc-600 font-bold uppercase tracking-[0.2em]">
