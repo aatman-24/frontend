@@ -12,16 +12,22 @@ const NO_SPINNERS_STYLE = `
   input[type=number] { -moz-appearance: textfield; appearance: none; }
 `;
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085/api/test/strangle';
+const STRANGLE_API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085/api/test/strangle';
+const STRADDLE_API_BASE = import.meta.env.VITE_STRADDLE_API_BASE_URL
+  || STRANGLE_API_BASE.replace('/api/test/strangle', '/api/test/straddle');
 const ORDERS_API = import.meta.env.VITE_ORDERS_API_URL || 'http://localhost:8082';
-const WS_URL = API_BASE.replace('/api/test/strangle', '/ws-trading');
+const WS_URL = STRANGLE_API_BASE.replace('/api/test/strangle', '/ws-trading');
+
+const getApiBaseForStrategy = (strategyType) => {
+  return (strategyType || '').toUpperCase() === 'STRADDLE' ? STRADDLE_API_BASE : STRANGLE_API_BASE;
+};
 
 const INDICES = [
-  { key: 'NIFTY', name: 'Nifty 50', type: 'MULTILEG_DELTA_STRANGLE', colorText: 'text-blue-500', colorGrad: 'from-blue-500/20', lotSize: 50 },
-  { key: 'BANKNIFTY', name: 'Bank Nifty', type: 'MULTILEG_DELTA_STRANGLE', colorText: 'text-purple-500', colorGrad: 'from-purple-500/20', lotSize: 15 },
-  { key: 'FINNIFTY', name: 'Fin Nifty', type: 'MULTILEG_DELTA_STRANGLE', colorText: 'text-indigo-500', colorGrad: 'from-indigo-500/20', lotSize: 40 },
-  { key: 'SENSEX', name: 'Sensex', type: 'MULTILEG_DELTA_STRANGLE', colorText: 'text-fuchsia-500', colorGrad: 'from-fuchsia-500/20', lotSize: 10 },
-  { key: 'CRUDEOIL', name: 'Crude Oil', type: 'MULTILEG_DELTA_STRANGLE', colorText: 'text-amber-500', colorGrad: 'from-amber-500/20', lotSize: 100 }
+  { key: 'NIFTY', name: 'Nifty 50', type: 'MULTILEG_DELTA_STRADDLE', colorText: 'text-blue-500', colorGrad: 'from-blue-500/20', lotSize: 50 },
+  { key: 'BANKNIFTY', name: 'Bank Nifty', type: 'MULTILEG_DELTA_STRADDLE', colorText: 'text-purple-500', colorGrad: 'from-purple-500/20', lotSize: 15 },
+  { key: 'FINNIFTY', name: 'Fin Nifty', type: 'MULTILEG_DELTA_STRADDLE', colorText: 'text-indigo-500', colorGrad: 'from-indigo-500/20', lotSize: 40 },
+  { key: 'SENSEX', name: 'Sensex', type: 'MULTILEG_DELTA_STRADDLE', colorText: 'text-fuchsia-500', colorGrad: 'from-fuchsia-500/20', lotSize: 10 },
+  { key: 'CRUDEOIL', name: 'Crude Oil', type: 'MULTILEG_DELTA_STRADDLE', colorText: 'text-amber-500', colorGrad: 'from-amber-500/20', lotSize: 100 }
 ];
 
 const getExpectedPositions = (indexKey, center) => {
@@ -349,23 +355,29 @@ function App() {
   const [view, setView] = useState('TERMINAL'); // 'TERMINAL' or 'ANALYSIS'
   const [analysisSessionId, setAnalysisSessionId] = useState(null);
   const [analysisIndexKey, setAnalysisIndexKey] = useState(null);
+  const selectedSessionsRef = React.useRef({});
+  const fetchedSessionsRef = React.useRef(new Set());
 
   // STRATEGY SETTINGS STATE (Designer state for NEW instances)
   const [designerSettings, setDesignerSettings] = useState({
-    NIFTY: { numLegs: 3, safetyGap: 300, interval: 25 },
-    BANKNIFTY: { numLegs: 3, safetyGap: 500, interval: 50 },
-    FINNIFTY: { numLegs: 3, safetyGap: 300, interval: 25 },
-    SENSEX: { numLegs: 3, safetyGap: 500, interval: 50 },
-    CRUDEOIL: { numLegs: 3, safetyGap: 400, interval: 25 }
+    NIFTY: { numLegs: 3, safetyGap: 300, interval: 25, strategyType: 'STRADDLE' },
+    BANKNIFTY: { numLegs: 3, safetyGap: 500, interval: 50, strategyType: 'STRADDLE' },
+    FINNIFTY: { numLegs: 3, safetyGap: 300, interval: 25, strategyType: 'STRADDLE' },
+    SENSEX: { numLegs: 3, safetyGap: 500, interval: 50, strategyType: 'STRADDLE' },
+    CRUDEOIL: { numLegs: 3, safetyGap: 400, interval: 25, strategyType: 'STRADDLE' }
   });
 
   const [sessionSettings, setSessionSettings] = useState({}); // sid -> settings
   const [selectedSessions, setSelectedSessions] = useState({}); // indexKey -> currentActiveSid
 
+  useEffect(() => {
+    selectedSessionsRef.current = selectedSessions;
+  }, [selectedSessions]);
+
   const updateDesignerSetting = (indexKey, key, value) => {
     setDesignerSettings(prev => ({
       ...prev,
-      [indexKey]: { ...prev[indexKey], [key]: parseInt(value) || 0 }
+      [indexKey]: { ...prev[indexKey], [key]: key === 'strategyType' ? value : (parseInt(value) || 0) }
     }));
   };
 
@@ -373,14 +385,19 @@ function App() {
     // 1. Initial State Fetch
     const fetchInitialData = async () => {
       try {
-        for (const idx of INDICES) {
-          try {
-            const res = await axios.get(`${API_BASE}/prices?index=${idx.key}`);
-            setAtmPrices(prev => ({
-              ...prev,
-              [idx.key]: { ...(prev[idx.key] || {}), ...res.data }
-            }));
-          } catch (e) {
+          for (const idx of INDICES) {
+            try {
+            const activeSid = selectedSessionsRef.current?.[idx.key];
+            const strategyTypeForPrice = activeSid
+              ? sessionSettings[activeSid]?.strategyType
+              : designerSettings[idx.key]?.strategyType;
+            const apiBase = getApiBaseForStrategy(strategyTypeForPrice);
+            const res = await axios.get(`${apiBase}/prices?index=${idx.key}`);
+              setAtmPrices(prev => ({
+                ...prev,
+                [idx.key]: { ...(prev[idx.key] || {}), ...res.data }
+              }));
+            } catch (e) {
             // Silence isolated API 404s if index is not actively streaming
           }
         }
@@ -393,6 +410,10 @@ function App() {
     fetchInitialData();
 
     // 2. Real-Time Link (WebSocket)
+    addLog(
+      `CONFIG: STRANGLE_API_BASE=${STRANGLE_API_BASE} | STRADDLE_API_BASE=${STRADDLE_API_BASE} | WS_URL=${WS_URL} | ORDERS_API=${ORDERS_API}`,
+      'info'
+    );
     const stompClient = new Client({
       webSocketFactory: () => new SockJS(WS_URL),
       debug: (str) => { },
@@ -474,10 +495,21 @@ function App() {
     }
   };
 
+  const syncSessionTrades = (sid) => {
+    if (!sid) return;
+    if (fetchedSessionsRef.current.has(sid)) return;
+    fetchedSessionsRef.current.add(sid);
+    fetchHistoricalTrades(sid);
+  };
+
   const handleAction = async (indexKey, action, sessionId = null) => {
     setLoading(prev => ({ ...prev, [sessionId || indexKey]: true }));
     try {
-      let url = `${API_BASE}/${action}?index=${indexKey}`;
+      const strategyTypeForAction = sessionId
+        ? sessionSettings[sessionId]?.strategyType
+        : designerSettings[indexKey]?.strategyType;
+      const apiBase = getApiBaseForStrategy(strategyTypeForAction);
+      let url = `${apiBase}/${action}?index=${indexKey}`;
       if (sessionId) url += `&sessionId=${sessionId}`;
 
       if (action === 'start') {
@@ -485,6 +517,7 @@ function App() {
         url += `&numLegs=${s.numLegs}&safetyGap=${s.safetyGap}&interval=${s.interval}`;
       }
 
+      addLog(`API_CALL: ${url}`, 'info');
       const res = await axios.get(url);
 
       if (action === 'start') {
@@ -495,7 +528,7 @@ function App() {
         setSessionSettings(prev => ({ ...prev, [sid]: { ...designerSettings[indexKey] } }));
         setSelectedSessions(prev => ({ ...prev, [indexKey]: sid }));
         addLog(`DEPLOYED: ${indexKey} | ID: ${sid.slice(-6)}`, 'success');
-        setTimeout(() => fetchHistoricalTrades(sid), 1000);
+        setTimeout(() => syncSessionTrades(sid), 1000);
       } else {
         const sid = sessionId;
         // LOCAL STATE CLEAR ONLY AFTER API SUCCESS (Confirmed Termination)
@@ -727,7 +760,10 @@ function App() {
                       return (
                         <button
                           key={sid}
-                          onClick={() => setSelectedSessions(prev => ({ ...prev, [idx.key]: sid }))}
+                          onClick={() => {
+                            setSelectedSessions(prev => ({ ...prev, [idx.key]: sid }));
+                            syncSessionTrades(sid);
+                          }}
                           className={`w-full text-left p-4 rounded-lg border transition-all duration-300 group
                             ${isSelected
                               ? 'bg-blue-600/10 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.1)]'
@@ -868,6 +904,17 @@ function App() {
                         onChange={e => updateDesignerSetting(idx.key, 'interval', e.target.value)}
                         className="w-full bg-black border border-zinc-800 rounded p-2 text-emerald-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
                       />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[9px] text-zinc-500 uppercase font-black tracking-widest mb-1.5 block">Strategy_Type</label>
+                      <select
+                        value={designerSettings[idx.key].strategyType}
+                        onChange={e => updateDesignerSetting(idx.key, 'strategyType', e.target.value)}
+                        className="w-full bg-black border border-zinc-800 rounded p-2 text-blue-400 font-black font-mono text-xs focus:border-blue-500 outline-none"
+                      >
+                        <option value="STRANGLE">STRANGLE</option>
+                        <option value="STRADDLE">STRADDLE</option>
+                      </select>
                     </div>
                   </div>
                   <button
